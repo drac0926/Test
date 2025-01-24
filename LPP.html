@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LPP Solver with Graph</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f9;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+ 
+        .container {
+            background: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            width: 100%;
+            margin-top: 20px;
+        }
+ 
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+ 
+        label {
+            display: block;
+            margin: 10px 0 5px;
+            color: #555;
+        }
+ 
+        input, button, textarea {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+ 
+        button {
+            background-color: #5c67f2;
+            color: white;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+ 
+        button:hover {
+            background-color: #4a54d8;
+        }
+ 
+        #graph-container {
+            width: 100%;
+            height: 400px;
+            margin-top: 20px;
+        }
+ 
+        .results {
+            background-color: #eef2f7;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            color: #333;
+        }
+    </style> -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>LPP Solver with Graph</h1>
+        <form id="lpp-form">
+            <label for="numVariables">Number of Variables:</label>
+            <input type="number" id="numVariables" name="numVariables" placeholder="e.g., 2" min="2" required>
+ 
+            <div id="dynamic-inputs"></div>
+ 
+            <label for="numConstraints">Number of Constraints:</label>
+            <input type="number" id="numConstraints" name="numConstraints" placeholder="e.g., 3" required>
+ 
+            <div id="constraint-inputs"></div>
+ 
+            <button type="submit">Solve and Plot</button>
+        </form>
+ 
+        <div id="results" class="results" style="display:none;"></div>
+        <div id="graph-container">
+            <canvas id="lpp-graph"></canvas>
+        </div>
+    </div>
+ 
+    <script>
+        const numVariablesInput = document.getElementById('numVariables');
+        const numConstraintsInput = document.getElementById('numConstraints');
+        const dynamicInputsDiv = document.getElementById('dynamic-inputs');
+        const constraintInputsDiv = document.getElementById('constraint-inputs');
+ 
+        // Update inputs dynamically based on the number of variables
+        numVariablesInput.addEventListener('input', () => {
+            dynamicInputsDiv.innerHTML = '';
+            const numVariables = parseInt(numVariablesInput.value);
+            if (!numVariables || numVariables < 2) return;
+ 
+            dynamicInputsDiv.innerHTML += '<label>Objective Function Coefficients:</label>';
+            for (let i = 1; i <= numVariables; i++) {
+                dynamicInputsDiv.innerHTML += `<input type="number" name="objVar${i}" placeholder="x${i} coefficient" required>`;
+            }
+        });
+ 
+        numConstraintsInput.addEventListener('input', () => {
+            constraintInputsDiv.innerHTML = '';
+            const numVariables = parseInt(numVariablesInput.value);
+            const numConstraints = parseInt(numConstraintsInput.value);
+            if (!numConstraints || !numVariables) return;
+ 
+            constraintInputsDiv.innerHTML += '<label>Constraints:</label>';
+            for (let i = 1; i <= numConstraints; i++) {
+                constraintInputsDiv.innerHTML += `<div><strong>Constraint ${i}:</strong>`;
+                for (let j = 1; j <= numVariables; j++) {
+                    constraintInputsDiv.innerHTML += `<input type="number" name="constraint${i}Var${j}" placeholder="x${j} coefficient" required>`;
+                }
+                constraintInputsDiv.innerHTML += `<input type="number" name="constraint${i}RHS" placeholder="RHS" required></div>`;
+            }
+        });
+ 
+        document.getElementById('lpp-form').addEventListener('submit', (event) => {
+            event.preventDefault();
+ 
+            const numVariables = parseInt(numVariablesInput.value);
+            const numConstraints = parseInt(numConstraintsInput.value);
+            const objectiveFunction = [];
+            const constraints = [];
+            const rhs = [];
+ 
+            for (let i = 1; i <= numVariables; i++) {
+                objectiveFunction.push(parseFloat(document.querySelector(`input[name="objVar${i}"]`).value));
+            }
+ 
+            for (let i = 1; i <= numConstraints; i++) {
+                const coeffs = [];
+                for (let j = 1; j <= numVariables; j++) {
+                    coeffs.push(parseFloat(document.querySelector(`input[name="constraint${i}Var${j}"]`).value));
+                }
+                constraints.push(coeffs);
+                rhs.push(parseFloat(document.querySelector(`input[name="constraint${i}RHS"]`).value));
+            }
+ 
+            plotGraph(objectiveFunction, constraints, rhs);
+        });
+ 
+        function calculateIntersection(coeff1, rhs1, coeff2, rhs2) {
+            const det = coeff1[0] * coeff2[1] - coeff2[0] * coeff1[1];
+            if (det === 0) return null;
+ 
+            const x = (rhs1 * coeff2[1] - rhs2 * coeff1[1]) / det;
+            const y = (coeff1[0] * rhs2 - coeff2[0] * rhs1) / det;
+ 
+            return [x, y];
+        }
+ 
+        function plotGraph(objectiveFunction, constraints, rhs) {
+            const ctx = document.getElementById('lpp-graph').getContext('2d');
+            const resultsDiv = document.getElementById('results');
+ 
+            // Handle multiple variables
+            const points = [];
+            for (let i = 0; i < constraints.length; i++) {
+                for (let j = i + 1; j < constraints.length; j++) {
+                    const intersection = calculateIntersection(constraints[i], rhs[i], constraints[j], rhs[j]);
+                    if (intersection) {
+                        points.push(intersection);
+                    }
+                }
+            }
+ 
+            // Filter feasible points
+            const feasiblePoints = points.filter(([x, y]) =>
+                x >= 0 && y >= 0 && constraints.every((coeffs, i) => coeffs.reduce((sum, coeff, index) => sum + coeff * [x, y][index], 0) <= rhs[i])
+            );
+ 
+            // Find the optimal point
+            let optimalPoint = null;
+            let optimalValue = -Infinity;
+ 
+            feasiblePoints.forEach(([x, y]) => {
+                const value = objectiveFunction.reduce((sum, coeff, index) => sum + coeff * [x, y][index], 0);
+                if (value > optimalValue) {
+                    optimalValue = value;
+                    optimalPoint = [x, y];
+                }
+            });
+ 
+            // Prepare data for plotting constraints
+            const datasets = constraints.map((coeffs, i) => {
+                const xIntercept = rhs[i] / coeffs[0];
+                const yIntercept = rhs[i] / coeffs[1];
+ 
+                const constraintLine = [
+                    { x: 0, y: yIntercept },
+                    { x: xIntercept, y: 0 },
+                ];
+ 
+                return {
+                    label: `Constraint ${i + 1}`,
+                    data: constraintLine,
+                    borderColor: `rgba(${Math.random() * 255}, ${Math.random() * 255}, ${Math.random() * 255}, 0.8)`,
+                    fill: false,
+                    tension: 0,
+                    showLine: true,
+                };
+            });
+ 
+            if (optimalPoint) {
+                datasets.push({
+                    label: 'Optimal Point',
+                    data: [{ x: optimalPoint[0], y: optimalPoint[1] }],
+                    backgroundColor: 'red',
+                    pointRadius: 6,
+                    pointStyle: 'circle',
+                });
+            }
+ 
+            new Chart(ctx, {
+                type: 'scatter',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    scales: {
+                        x: { type: 'linear', position: 'bottom' },
+                        y: { type: 'linear', position: 'left' },
+                    },
+                },
+            });
+ 
+            // Display results
+            resultsDiv.style.display = 'block';
+            if (optimalPoint) {
+                resultsDiv.innerHTML = `
+                    <strong>Optimal Value:</strong> ${optimalValue.toFixed(2)}<br>
+                    <strong>Optimal Point:</strong> (${optimalPoint[0].toFixed(2)}, ${optimalPoint[1].toFixed(2)})
+                `;
+            } else {
+                resultsDiv.innerHTML = `<strong>No feasible solution found.</strong>`;
+            }
+        }
+    </script>
+</body>
+</html>
